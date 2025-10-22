@@ -1,3 +1,4 @@
+# Your privacy rules for the pilot.
 Mode: Private-only (Hybrid toggle visible but OFF for Day-1).
 No raw documents ever leave this workspace.
 Embeddings computed locally; vectors stored under data/embeddings/.
