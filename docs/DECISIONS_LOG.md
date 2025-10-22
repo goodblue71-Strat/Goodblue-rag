@@ -1,3 +1,4 @@
+# 1-line entries for choices (embedding model, vector DB, etc.).
 Chosen embedding model family (e.g., “sentence-transformers”).
 Chosen vector store (e.g., “faiss-cpu”).
 Port (8502).
