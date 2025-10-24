@@ -211,102 +211,119 @@ tab_upload, tab_manage, tab_ask = st.tabs(["📤 Upload", "🗂️ Manage corpus
 with tab_upload:
     st.subheader("Upload your source files")
     st.caption("PDF or TXT. Multiple files supported.")
-    files = st.file_uploader(
-        "Drag & drop or browse",
-        type=["pdf", "txt"],
-        accept_multiple_files=True,
-        key="uploader_main",
-    )
+    
+    try:
+        files = st.file_uploader(
+            "Drag & drop or browse",
+            type=["pdf", "txt"],
+            accept_multiple_files=True,
+            key="uploader_main",
+        )
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        chunk_size = st.number_input("Chunk size", min_value=300, max_value=2000, value=900, step=50)
-    with c2:
-        overlap = st.number_input("Overlap", min_value=0, max_value=400, value=150, step=10)
-    with c3:
-        top_k_default = st.number_input("Default Top-K", min_value=1, max_value=10, value=4, step=1)
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            chunk_size = st.number_input("Chunk size", min_value=300, max_value=2000, value=900, step=50)
+        with c2:
+            overlap = st.number_input("Overlap", min_value=0, max_value=400, value=150, step=10)
+        with c3:
+            top_k_default = st.number_input("Default Top-K", min_value=1, max_value=10, value=4, step=1)
 
-    if files:
-        # Prevent re-processing on every rerun
-        file_names = [f.name for f in files]
-        if st.session_state.last_uploaded_files != file_names:
-            st.session_state.last_uploaded_files = file_names
-            
-            texts = []
-            with st.status("Reading files...", expanded=True) as status:
-                for f in files:
-                    try:
-                        st.write(f"📄 Reading {f.name}...")
-                        if f.type == "application/pdf":
-                            texts.append(read_pdf(f))
-                        else:
-                            texts.append(read_txt(f))
-                        st.write(f"✅ {f.name}")
-                    except Exception as e:
-                        st.error(f"❌ Error reading {f.name}: {str(e)}")
-                        st.code(traceback.format_exc())
-                        continue
-                status.update(label="Files read!", state="complete")
-            
-            st.session_state.raw_texts = [t for t in texts if t]
-
-            if st.session_state.raw_texts:
-                full_text = "\n\n".join(st.session_state.raw_texts)
-                st.session_state.chunks = simple_chunk(full_text, chunk_size=int(chunk_size), overlap=int(overlap))
-
-                if st.session_state.chunks:
-                    num_chunks = len(st.session_state.chunks)
-                    st.info(f"📄 Extracted {num_chunks} chunks from your files.")
-                    
-                    # Warn if too many chunks
-                    if num_chunks > 500:
-                        st.warning(f"⚠️ Large corpus ({num_chunks} chunks). This will take several minutes.")
-                    
-                    with st.status("Embedding & indexing...", expanded=True) as status:
+        if files:
+            # Prevent re-processing on every rerun
+            file_names = [f.name for f in files]
+            if st.session_state.last_uploaded_files != file_names:
+                st.session_state.last_uploaded_files = file_names
+                
+                texts = []
+                with st.status("Reading files...", expanded=True) as status:
+                    for f in files:
                         try:
-                            # Batch process - smaller batches for stability
-                            batch_size = 50
-                            all_vecs = []
-                            
-                            progress_bar = st.progress(0)
-                            
-                            for i in range(0, num_chunks, batch_size):
-                                batch = st.session_state.chunks[i:i+batch_size]
-                                batch_num = (i // batch_size) + 1
-                                total_batches = (num_chunks + batch_size - 1) // batch_size
-                                
-                                st.write(f"🔄 Embedding batch {batch_num}/{total_batches} ({len(batch)} chunks)...")
-                                progress_bar.progress(i / num_chunks)
-                                
-                                batch_vecs = embed_texts(batch)
-                                all_vecs.append(batch_vecs)
-                                
-                                # Delay to respect rate limits
-                                if i + batch_size < num_chunks:
-                                    time.sleep(1)
-                            
-                            progress_bar.progress(1.0)
-                            st.write("🔨 Building search index...")
-                            
-                            # Combine all vectors
-                            vecs = np.vstack(all_vecs)
-                            st.session_state.embeddings = vecs
-                            st.session_state.index = build_faiss_index(vecs)
-                            
-                            status.update(label=f"✅ Indexed {num_chunks} chunks!", state="complete")
+                            st.write(f"📄 Reading {f.name}...")
+                            if f.type == "application/pdf":
+                                texts.append(read_pdf(f))
+                            else:
+                                texts.append(read_txt(f))
+                            st.write(f"✅ {f.name}")
                         except Exception as e:
-                            st.error(f"❌ Failed: {str(e)}")
+                            st.error(f"❌ Error reading {f.name}: {str(e)}")
                             st.code(traceback.format_exc())
-                            status.update(label="❌ Failed", state="error")
+                            continue
+                    status.update(label="Files read!", state="complete")
+                
+                st.session_state.raw_texts = [t for t in texts if t]
+
+                if st.session_state.raw_texts:
+                    full_text = "\n\n".join(st.session_state.raw_texts)
+                    st.session_state.chunks = simple_chunk(full_text, chunk_size=int(chunk_size), overlap=int(overlap))
+
+                    if st.session_state.chunks:
+                        num_chunks = len(st.session_state.chunks)
+                        st.info(f"📄 Extracted {num_chunks} chunks from your files.")
+                        
+                        # Warn if too many chunks
+                        if num_chunks > 500:
+                            st.warning(f"⚠️ Large corpus ({num_chunks} chunks). This will take several minutes.")
+                        
+                        with st.status("Embedding & indexing...", expanded=True) as status:
+                            try:
+                                # Batch process - smaller batches for stability
+                                batch_size = 50
+                                all_vecs = []
+                                
+                                progress_bar = st.progress(0)
+                                
+                                for i in range(0, num_chunks, batch_size):
+                                    batch = st.session_state.chunks[i:i+batch_size]
+                                    batch_num = (i // batch_size) + 1
+                                    total_batches = (num_chunks + batch_size - 1) // batch_size
+                                    
+                                    st.write(f"🔄 Embedding batch {batch_num}/{total_batches} ({len(batch)} chunks)...")
+                                    progress_bar.progress(i / num_chunks)
+                                    
+                                    batch_vecs = embed_texts(batch)
+                                    all_vecs.append(batch_vecs)
+                                    
+                                    # Delay to respect rate limits
+                                    if i + batch_size < num_chunks:
+                                        time.sleep(1)
+                                
+                                progress_bar.progress(1.0)
+                                st.write("🔨 Building search index...")
+                                
+                                # Combine all vectors
+                                vecs = np.vstack(all_vecs)
+                                st.session_state.embeddings = vecs
+                                st.session_state.index = build_faiss_index(vecs)
+                                
+                                status.update(label=f"✅ Indexed {num_chunks} chunks!", state="complete")
+                            except Exception as e:
+                                st.error(f"❌ Failed during embedding: {str(e)}")
+                                st.error(f"❌ Error type: {type(e).__name__}")
+                                st.code(traceback.format_exc())
+                                status.update(label="❌ Failed", state="error")
+                                
+                                # Show troubleshooting steps
+                                st.write("**Troubleshooting:**")
+                                st.write("1. Click 'Test Embedding API' in Debug Info above")
+                                st.write("2. Check your OpenAI billing at https://platform.openai.com/account/billing")
+                                st.write("3. Verify your API key has embedding permissions")
+                    else:
+                        st.warning("No text content detected in your files.")
                 else:
-                    st.warning("No text content detected in your files.")
+                    st.warning("Could not extract text from uploaded files.")
             else:
-                st.warning("Could not extract text from uploaded files.")
-        else:
-            # Files already processed
-            if st.session_state.chunks:
-                st.success(f"✅ {len(st.session_state.chunks)} chunks already loaded.")
-                st.caption("Upload new files to replace current corpus.")
+                # Files already processed
+                if st.session_state.chunks:
+                    st.success(f"✅ {len(st.session_state.chunks)} chunks already loaded.")
+                    st.caption("Upload new files to replace current corpus.")
+    
+    except Exception as e:
+        st.error("🚨 **CRITICAL ERROR IN UPLOAD TAB**")
+        st.error(f"Error: {str(e)}")
+        st.error(f"Type: {type(e).__name__}")
+        st.code(traceback.format_exc())
+        st.write("**This error occurred in the upload interface itself.**")
+        st.write("Please screenshot this and share it for debugging.")
 
 # -------------------------- Manage Tab --------------------------- #
 with tab_manage:
