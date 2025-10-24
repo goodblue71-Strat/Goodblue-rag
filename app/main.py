@@ -4,6 +4,8 @@
 import os
 from io import StringIO
 from typing import List, Tuple
+import time
+import traceback
 
 import numpy as np
 import streamlit as st
@@ -201,15 +203,40 @@ with tab_upload:
             st.session_state.chunks = simple_chunk(full_text, chunk_size=int(chunk_size), overlap=int(overlap))
 
             if st.session_state.chunks:
-                st.info(f"📄 Extracted {len(st.session_state.chunks)} chunks from your files.")
+                num_chunks = len(st.session_state.chunks)
+                st.info(f"📄 Extracted {num_chunks} chunks from your files.")
+                
+                # Warn if too many chunks
+                if num_chunks > 500:
+                    st.warning(f"⚠️ Large corpus detected ({num_chunks} chunks). This may take a while or hit rate limits.")
+                
                 with st.spinner("Embedding & indexing…"):
                     try:
-                        vecs = embed_texts(st.session_state.chunks)
+                        # Batch process in chunks of 100 to avoid rate limits and timeouts
+                        batch_size = 100
+                        all_vecs = []
+                        
+                        for i in range(0, num_chunks, batch_size):
+                            batch = st.session_state.chunks[i:i+batch_size]
+                            batch_num = (i // batch_size) + 1
+                            total_batches = (num_chunks + batch_size - 1) // batch_size
+                            
+                            st.write(f"Processing batch {batch_num}/{total_batches}...")
+                            batch_vecs = embed_texts(batch)
+                            all_vecs.append(batch_vecs)
+                            
+                            # Small delay to respect rate limits (only if more batches remain)
+                            if i + batch_size < num_chunks:
+                                time.sleep(1)
+                        
+                        # Combine all vectors
+                        vecs = np.vstack(all_vecs)
                         st.session_state.embeddings = vecs
                         st.session_state.index = build_faiss_index(vecs)
-                        st.success(f"✅ Indexed {len(st.session_state.chunks)} chunks.")
+                        st.success(f"✅ Indexed {num_chunks} chunks in {len(all_vecs)} batches.")
                     except Exception as e:
                         st.error(f"Failed during embedding/indexing: {str(e)}")
+                        st.code(traceback.format_exc())
             else:
                 st.warning("No text content detected in your files.")
         else:
