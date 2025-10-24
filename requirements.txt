@@ -1,36 +1,12 @@
-# Names of libraries
-
-# Core app
-streamlit==1.39.0
-pydantic==2.9.2
-python-dotenv==1.0.1
-
-# Parsing / OCR (for PDFs, DOCX, and images)
-pypdf==5.0.1
-pdfminer.six==20221105
-Pillow==10.4.0
-pytesseract==0.3.13          # only used if you ingest scanned PDFs
-
-# Embeddings (open-weights, CPU-friendly)
-sentence-transformers==3.0.1
-torch==2.4.1
-transformers==4.44.2
-
-# Vector store (local FAISS index)
-faiss-cpu==1.8.0
-
-# Tokenization / utility
-tiktoken==0.7.0
-regex==2024.9.11
-
-# Optional analysis & export (used later)
-python-pptx==0.6.23          # export SWOT slides
-rank-bm25==0.2.2             # simple reranker (optional)
-
-# Logging / YAML config
-pyyaml==6.0.2
-
-# Testing / linting (optional but helpful)
-pytest==8.3.3
-black==24.8.0
-
+streamlit
+openai
+langchain
+langchain-community
+langchain-core
+faiss-cpu
+tiktoken
+python-dotenv
+pypdf
+requests
+pandas
+numpy
