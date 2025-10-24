@@ -77,16 +77,32 @@ def embed_texts(texts: List[str], model: str = "text-embedding-3-small") -> np.n
         st.stop()
     
     try:
+        # Log what we're sending
+        st.write(f"  → Sending {len(texts)} texts to OpenAI ({sum(len(t) for t in texts)} total chars)")
+        
         resp = client.embeddings.create(model=model, input=texts)
+        
+        st.write(f"  ✓ Received {len(resp.data)} embeddings")
         vecs = [d.embedding for d in resp.data]
         return np.array(vecs, dtype="float32")
     except Exception as e:
-        st.error(f"❌ OpenAI API Error: {str(e)}")
-        st.write("**Possible causes:**")
-        st.write("- Invalid API key")
-        st.write("- API quota exceeded or billing issue")
-        st.write("- Network/connectivity issues")
-        st.write("- Model access restricted")
+        error_type = type(e).__name__
+        error_msg = str(e)
+        
+        st.error(f"❌ OpenAI API Error ({error_type}): {error_msg}")
+        st.write("**Full error details:**")
+        st.code(traceback.format_exc())
+        
+        # Specific error handling
+        if "rate_limit" in error_msg.lower():
+            st.warning("🕐 Rate limit hit. Try again in a few minutes or reduce batch size.")
+        elif "quota" in error_msg.lower() or "insufficient" in error_msg.lower():
+            st.warning("💳 Quota exceeded. Check your OpenAI billing at https://platform.openai.com/account/billing")
+        elif "authentication" in error_msg.lower() or "api_key" in error_msg.lower():
+            st.warning("🔑 Authentication failed. Verify your API key is correct.")
+        elif "model" in error_msg.lower():
+            st.warning(f"🤖 Model '{model}' not accessible. Check your API tier/permissions.")
+        
         raise
 
 def build_faiss_index(vectors: np.ndarray) -> faiss.IndexFlatIP:
@@ -178,6 +194,16 @@ with st.expander("🔍 Debug Info (click to expand)"):
     st.write(f"**Session state:**")
     st.write(f"- Chunks loaded: {len(st.session_state.chunks)}")
     st.write(f"- Index exists: {st.session_state.index is not None}")
+    
+    st.divider()
+    st.write("**Test OpenAI API:**")
+    if st.button("🧪 Test Embedding API", key="test_api"):
+        with st.spinner("Testing..."):
+            try:
+                test_vec = embed_texts(["Hello world test"])
+                st.success(f"✅ API works! Got {len(test_vec[0])} dimensional vector.")
+            except Exception as e:
+                st.error(f"❌ API test failed: {str(e)}")
 
 tab_upload, tab_manage, tab_ask = st.tabs(["📤 Upload", "🗂️ Manage corpus", "❓ Ask questions"])
 
