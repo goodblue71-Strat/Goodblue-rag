@@ -17,10 +17,16 @@ load_dotenv()
 
 def get_client():
     """
-    Lazy-init OpenAI client so import doesn't crash if key is missing.
+    Lazy-init OpenAI client. Checks Streamlit secrets first, then .env
     Returns None if no key; callers should guard.
     """
-    key = os.getenv("OPENAI_API_KEY", "")
+    # Try Streamlit secrets first (for cloud deployment)
+    try:
+        key = st.secrets.get("OPENAI_API_KEY", "")
+    except (AttributeError, FileNotFoundError):
+        # Fall back to environment variable (for local development)
+        key = os.getenv("OPENAI_API_KEY", "")
+    
     if not key:
         return None
     from openai import OpenAI
