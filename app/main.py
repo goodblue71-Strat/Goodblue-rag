@@ -63,11 +63,21 @@ def embed_texts(texts: List[str], model: str = "text-embedding-3-small") -> np.n
     """Return a 2D numpy array (N, d) of embedding vectors."""
     client = get_client()
     if client is None:
-        st.error("OPENAI_API_KEY missing. Add it to a `.env` in the repo root.")
+        st.error("❌ OPENAI_API_KEY missing. Check Streamlit secrets or .env file.")
         st.stop()
-    resp = client.embeddings.create(model=model, input=texts)
-    vecs = [d.embedding for d in resp.data]
-    return np.array(vecs, dtype="float32")
+    
+    try:
+        resp = client.embeddings.create(model=model, input=texts)
+        vecs = [d.embedding for d in resp.data]
+        return np.array(vecs, dtype="float32")
+    except Exception as e:
+        st.error(f"❌ OpenAI API Error: {str(e)}")
+        st.write("**Possible causes:**")
+        st.write("- Invalid API key")
+        st.write("- API quota exceeded or billing issue")
+        st.write("- Network/connectivity issues")
+        st.write("- Model access restricted")
+        st.stop()
 
 def build_faiss_index(vectors: np.ndarray) -> faiss.IndexFlatIP:
     """Create a cosine-similarity FAISS index by normalizing and using inner product."""
@@ -87,21 +97,31 @@ def llm_answer(query: str, context_chunks: List[str]) -> str:
     """LLM answer grounded strictly in provided context with simple [C#] citations."""
     client = get_client()
     if client is None:
-        st.error("OPENAI_API_KEY missing. Add it to a `.env` in the repo root.")
+        st.error("❌ OPENAI_API_KEY missing. Check Streamlit secrets or .env file.")
         st.stop()
-    system_msg = (
-        "You are a helpful strategy analyst. Answer ONLY using the provided context. "
-        "Cite chunk numbers like [C1], [C2]. If the answer isn't in context, say you don't know."
-    )
-    numbered = "\n\n".join([f"[C{i+1}] {c}" for i, c in enumerate(context_chunks)])
-    user_msg = f"Question: {query}\n\nContext:\n{numbered}"
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",  # adjust as you prefer
-        messages=[{"role": "system", "content": system_msg},
-                  {"role": "user", "content": user_msg}],
-        temperature=0.2,
-    )
-    return resp.choices[0].message.content.strip()
+    
+    try:
+        system_msg = (
+            "You are a helpful strategy analyst. Answer ONLY using the provided context. "
+            "Cite chunk numbers like [C1], [C2]. If the answer isn't in context, say you don't know."
+        )
+        numbered = "\n\n".join([f"[C{i+1}] {c}" for i, c in enumerate(context_chunks)])
+        user_msg = f"Question: {query}\n\nContext:\n{numbered}"
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",  # adjust as you prefer
+            messages=[{"role": "system", "content": system_msg},
+                      {"role": "user", "content": user_msg}],
+            temperature=0.2,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        st.error(f"❌ OpenAI API Error: {str(e)}")
+        st.write("**Possible causes:**")
+        st.write("- Invalid API key")
+        st.write("- API quota exceeded or billing issue")
+        st.write("- Network/connectivity issues")
+        st.write("- Model access restricted")
+        st.stop()
 
 # ------------------------ Session State -------------------------- #
 defaults = {
@@ -116,6 +136,30 @@ for k, v in defaults.items():
 
 # ----------------------------- UI -------------------------------- #
 st.title("GoodBlue — RAG Starter")
+
+# Debug section
+with st.expander("🔍 Debug Info (click to expand)"):
+    client = get_client()
+    if client:
+        st.success("✅ OpenAI client initialized successfully")
+    else:
+        st.error("❌ Failed to initialize OpenAI client")
+    
+    st.write("**Checking API key source:**")
+    try:
+        has_secret = "OPENAI_API_KEY" in st.secrets
+        st.write(f"- Streamlit secret exists: {has_secret}")
+        if has_secret:
+            key = st.secrets.get("OPENAI_API_KEY", "")
+            st.write(f"- Key starts with: `{key[:10]}...`")
+            st.write(f"- Key length: {len(key)} characters")
+    except Exception as e:
+        st.write(f"- Streamlit secrets error: {e}")
+    
+    env_key = os.getenv("OPENAI_API_KEY", "")
+    st.write(f"- Environment variable exists: {bool(env_key)}")
+    if env_key:
+        st.write(f"- Env key starts with: `{env_key[:10]}...`")
 
 tab_upload, tab_manage, tab_ask = st.tabs(["📤 Upload", "🗂️ Manage corpus", "❓ Ask questions"])
 
@@ -141,23 +185,35 @@ with tab_upload:
     if files:
         texts = []
         for f in files:
-            if f.type == "application/pdf":
-                texts.append(read_pdf(f))
-            else:
-                texts.append(read_txt(f))
+            try:
+                if f.type == "application/pdf":
+                    texts.append(read_pdf(f))
+                else:
+                    texts.append(read_txt(f))
+            except Exception as e:
+                st.error(f"Error reading file {f.name}: {str(e)}")
+                continue
+        
         st.session_state.raw_texts = [t for t in texts if t]
 
-        full_text = "\n\n".join(st.session_state.raw_texts)
-        st.session_state.chunks = simple_chunk(full_text, chunk_size=int(chunk_size), overlap=int(overlap))
+        if st.session_state.raw_texts:
+            full_text = "\n\n".join(st.session_state.raw_texts)
+            st.session_state.chunks = simple_chunk(full_text, chunk_size=int(chunk_size), overlap=int(overlap))
 
-        if st.session_state.chunks:
-            with st.spinner("Embedding & indexing…"):
-                vecs = embed_texts(st.session_state.chunks)
-                st.session_state.embeddings = vecs
-                st.session_state.index = build_faiss_index(vecs)
-            st.success(f"Indexed {len(st.session_state.chunks)} chunks.")
+            if st.session_state.chunks:
+                st.info(f"📄 Extracted {len(st.session_state.chunks)} chunks from your files.")
+                with st.spinner("Embedding & indexing…"):
+                    try:
+                        vecs = embed_texts(st.session_state.chunks)
+                        st.session_state.embeddings = vecs
+                        st.session_state.index = build_faiss_index(vecs)
+                        st.success(f"✅ Indexed {len(st.session_state.chunks)} chunks.")
+                    except Exception as e:
+                        st.error(f"Failed during embedding/indexing: {str(e)}")
+            else:
+                st.warning("No text content detected in your files.")
         else:
-            st.warning("No text content detected in your files.")
+            st.warning("Could not extract text from uploaded files.")
 
 # -------------------------- Manage Tab --------------------------- #
 with tab_manage:
@@ -184,14 +240,18 @@ with tab_manage:
                 st.session_state.embeddings = None
                 st.session_state.index = None
                 st.success("Cleared.")
+                st.rerun()
         with c2:
             if st.button("Re-embed & re-index"):
                 if st.session_state.chunks:
                     with st.spinner("Rebuilding index…"):
-                        vecs = embed_texts(st.session_state.chunks)
-                        st.session_state.embeddings = vecs
-                        st.session_state.index = build_faiss_index(vecs)
-                    st.success("Index rebuilt.")
+                        try:
+                            vecs = embed_texts(st.session_state.chunks)
+                            st.session_state.embeddings = vecs
+                            st.session_state.index = build_faiss_index(vecs)
+                            st.success("Index rebuilt.")
+                        except Exception as e:
+                            st.error(f"Failed to rebuild index: {str(e)}")
                 else:
                     st.warning("No chunks to re-index.")
 
@@ -214,10 +274,14 @@ with tab_ask:
     if st.session_state.index is None or st.session_state.embeddings is None:
         if st.button("Embed & index now", type="secondary"):
             with st.spinner("Embedding & indexing…"):
-                vecs = embed_texts(st.session_state.chunks)
-                st.session_state.embeddings = vecs
-                st.session_state.index = build_faiss_index(vecs)
-            st.success(f"Indexed {len(st.session_state.chunks)} chunks.")
+                try:
+                    vecs = embed_texts(st.session_state.chunks)
+                    st.session_state.embeddings = vecs
+                    st.session_state.index = build_faiss_index(vecs)
+                    st.success(f"Indexed {len(st.session_state.chunks)} chunks.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to embed/index: {str(e)}")
         if st.session_state.index is None:
             st.info("No index yet. Click **Embed & index now** to prepare your corpus.")
             st.stop()
@@ -228,25 +292,28 @@ with tab_ask:
     go = st.button("Search & Answer", type="primary", disabled=not q)
 
     if go:
-        with st.spinner("Retrieving…"):
-            q_vec = embed_texts([q])
-            D, I = search(st.session_state.index, q_vec, k=top_k)
-            selected = [st.session_state.chunks[i] for i in I[0] if 0 <= i < len(st.session_state.chunks)]
+        try:
+            with st.spinner("Retrieving…"):
+                q_vec = embed_texts([q])
+                D, I = search(st.session_state.index, q_vec, k=top_k)
+                selected = [st.session_state.chunks[i] for i in I[0] if 0 <= i < len(st.session_state.chunks)]
 
-        with st.spinner("Generating answer…"):
-            answer = llm_answer(q, selected)
+            with st.spinner("Generating answer…"):
+                answer = llm_answer(q, selected)
 
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            st.markdown("### Answer")
-            st.write(answer)
-        with col2:
-            st.markdown("### Sources")
-            for rank, idx in enumerate(I[0], start=1):
-                if 0 <= idx < len(st.session_state.chunks):
-                    st.markdown(f"**C{rank}** (score: {float(D[0][rank-1]):.3f})")
-                    chunk = st.session_state.chunks[idx]
-                    st.caption(chunk[:500] + ("…" if len(chunk) > 500 else ""))
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.markdown("### Answer")
+                st.write(answer)
+            with col2:
+                st.markdown("### Sources")
+                for rank, idx in enumerate(I[0], start=1):
+                    if 0 <= idx < len(st.session_state.chunks):
+                        st.markdown(f"**C{rank}** (score: {float(D[0][rank-1]):.3f})")
+                        chunk = st.session_state.chunks[idx]
+                        st.caption(chunk[:500] + ("…" if len(chunk) > 500 else ""))
+        except Exception as e:
+            st.error(f"Error during search/answer: {str(e)}")
 
 # ------------------------- Notes -------------------------------- #
 # Requirements to include in requirements.txt:
@@ -259,4 +326,6 @@ with tab_ask:
 #
 # .env (repo root) must contain:
 # OPENAI_API_KEY=sk-...
-
+#
+# For Streamlit Cloud, add to secrets (TOML format):
+# OPENAI_API_KEY = "sk-..."
