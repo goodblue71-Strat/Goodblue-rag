@@ -37,15 +37,23 @@ def get_client():
 # --------------------------- Helpers ----------------------------- #
 def read_pdf(file) -> str:
     """Extract text from a PDF file-like object."""
-    reader = PdfReader(file)
-    texts = []
-    for p in reader.pages:
-        texts.append(p.extract_text() or "")
-    return "\n".join(texts)
+    try:
+        reader = PdfReader(file)
+        texts = []
+        for p in reader.pages:
+            texts.append(p.extract_text() or "")
+        return "\n".join(texts)
+    except Exception as e:
+        st.error(f"PDF reading error: {str(e)}")
+        raise
 
 def read_txt(file) -> str:
     """Read text from a TXT file-like object."""
-    return StringIO(file.getvalue().decode("utf-8", errors="ignore")).read()
+    try:
+        return StringIO(file.getvalue().decode("utf-8", errors="ignore")).read()
+    except Exception as e:
+        st.error(f"TXT reading error: {str(e)}")
+        raise
 
 def simple_chunk(text: str, chunk_size: int = 900, overlap: int = 150) -> List[str]:
     """Naive character-based chunking with overlap."""
@@ -79,21 +87,29 @@ def embed_texts(texts: List[str], model: str = "text-embedding-3-small") -> np.n
         st.write("- API quota exceeded or billing issue")
         st.write("- Network/connectivity issues")
         st.write("- Model access restricted")
-        st.stop()
+        raise
 
 def build_faiss_index(vectors: np.ndarray) -> faiss.IndexFlatIP:
     """Create a cosine-similarity FAISS index by normalizing and using inner product."""
-    faiss.normalize_L2(vectors)
-    idx = faiss.IndexFlatIP(vectors.shape[1])
-    idx.add(vectors)
-    return idx
+    try:
+        faiss.normalize_L2(vectors)
+        idx = faiss.IndexFlatIP(vectors.shape[1])
+        idx.add(vectors)
+        return idx
+    except Exception as e:
+        st.error(f"❌ FAISS indexing error: {str(e)}")
+        raise
 
 def search(idx: faiss.IndexFlatIP, query_vec: np.ndarray, k: int = 4) -> Tuple[np.ndarray, np.ndarray]:
     """Search top-k; returns (distances, indices)."""
-    q = query_vec.copy()
-    faiss.normalize_L2(q)
-    D, I = idx.search(q, k)
-    return D, I
+    try:
+        q = query_vec.copy()
+        faiss.normalize_L2(q)
+        D, I = idx.search(q, k)
+        return D, I
+    except Exception as e:
+        st.error(f"❌ Search error: {str(e)}")
+        raise
 
 def llm_answer(query: str, context_chunks: List[str]) -> str:
     """LLM answer grounded strictly in provided context with simple [C#] citations."""
@@ -110,7 +126,7 @@ def llm_answer(query: str, context_chunks: List[str]) -> str:
         numbered = "\n\n".join([f"[C{i+1}] {c}" for i, c in enumerate(context_chunks)])
         user_msg = f"Question: {query}\n\nContext:\n{numbered}"
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",  # adjust as you prefer
+            model="gpt-4o-mini",
             messages=[{"role": "system", "content": system_msg},
                       {"role": "user", "content": user_msg}],
             temperature=0.2,
@@ -118,19 +134,15 @@ def llm_answer(query: str, context_chunks: List[str]) -> str:
         return resp.choices[0].message.content.strip()
     except Exception as e:
         st.error(f"❌ OpenAI API Error: {str(e)}")
-        st.write("**Possible causes:**")
-        st.write("- Invalid API key")
-        st.write("- API quota exceeded or billing issue")
-        st.write("- Network/connectivity issues")
-        st.write("- Model access restricted")
-        st.stop()
+        raise
 
 # ------------------------ Session State -------------------------- #
 defaults = {
-    "raw_texts": [],      # list of raw document strings
-    "chunks": [],         # list[str] chunks
-    "embeddings": None,   # np.ndarray or None
-    "index": None,        # FAISS index or None
+    "raw_texts": [],
+    "chunks": [],
+    "embeddings": None,
+    "index": None,
+    "last_uploaded_files": None,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -162,6 +174,10 @@ with st.expander("🔍 Debug Info (click to expand)"):
     st.write(f"- Environment variable exists: {bool(env_key)}")
     if env_key:
         st.write(f"- Env key starts with: `{env_key[:10]}...`")
+    
+    st.write(f"**Session state:**")
+    st.write(f"- Chunks loaded: {len(st.session_state.chunks)}")
+    st.write(f"- Index exists: {st.session_state.index is not None}")
 
 tab_upload, tab_manage, tab_ask = st.tabs(["📤 Upload", "🗂️ Manage corpus", "❓ Ask questions"])
 
@@ -185,62 +201,86 @@ with tab_upload:
         top_k_default = st.number_input("Default Top-K", min_value=1, max_value=10, value=4, step=1)
 
     if files:
-        texts = []
-        for f in files:
-            try:
-                if f.type == "application/pdf":
-                    texts.append(read_pdf(f))
-                else:
-                    texts.append(read_txt(f))
-            except Exception as e:
-                st.error(f"Error reading file {f.name}: {str(e)}")
-                continue
-        
-        st.session_state.raw_texts = [t for t in texts if t]
-
-        if st.session_state.raw_texts:
-            full_text = "\n\n".join(st.session_state.raw_texts)
-            st.session_state.chunks = simple_chunk(full_text, chunk_size=int(chunk_size), overlap=int(overlap))
-
-            if st.session_state.chunks:
-                num_chunks = len(st.session_state.chunks)
-                st.info(f"📄 Extracted {num_chunks} chunks from your files.")
-                
-                # Warn if too many chunks
-                if num_chunks > 500:
-                    st.warning(f"⚠️ Large corpus detected ({num_chunks} chunks). This may take a while or hit rate limits.")
-                
-                with st.spinner("Embedding & indexing…"):
+        # Prevent re-processing on every rerun
+        file_names = [f.name for f in files]
+        if st.session_state.last_uploaded_files != file_names:
+            st.session_state.last_uploaded_files = file_names
+            
+            texts = []
+            with st.status("Reading files...", expanded=True) as status:
+                for f in files:
                     try:
-                        # Batch process in chunks of 100 to avoid rate limits and timeouts
-                        batch_size = 100
-                        all_vecs = []
-                        
-                        for i in range(0, num_chunks, batch_size):
-                            batch = st.session_state.chunks[i:i+batch_size]
-                            batch_num = (i // batch_size) + 1
-                            total_batches = (num_chunks + batch_size - 1) // batch_size
-                            
-                            st.write(f"Processing batch {batch_num}/{total_batches}...")
-                            batch_vecs = embed_texts(batch)
-                            all_vecs.append(batch_vecs)
-                            
-                            # Small delay to respect rate limits (only if more batches remain)
-                            if i + batch_size < num_chunks:
-                                time.sleep(1)
-                        
-                        # Combine all vectors
-                        vecs = np.vstack(all_vecs)
-                        st.session_state.embeddings = vecs
-                        st.session_state.index = build_faiss_index(vecs)
-                        st.success(f"✅ Indexed {num_chunks} chunks in {len(all_vecs)} batches.")
+                        st.write(f"📄 Reading {f.name}...")
+                        if f.type == "application/pdf":
+                            texts.append(read_pdf(f))
+                        else:
+                            texts.append(read_txt(f))
+                        st.write(f"✅ {f.name}")
                     except Exception as e:
-                        st.error(f"Failed during embedding/indexing: {str(e)}")
+                        st.error(f"❌ Error reading {f.name}: {str(e)}")
                         st.code(traceback.format_exc())
+                        continue
+                status.update(label="Files read!", state="complete")
+            
+            st.session_state.raw_texts = [t for t in texts if t]
+
+            if st.session_state.raw_texts:
+                full_text = "\n\n".join(st.session_state.raw_texts)
+                st.session_state.chunks = simple_chunk(full_text, chunk_size=int(chunk_size), overlap=int(overlap))
+
+                if st.session_state.chunks:
+                    num_chunks = len(st.session_state.chunks)
+                    st.info(f"📄 Extracted {num_chunks} chunks from your files.")
+                    
+                    # Warn if too many chunks
+                    if num_chunks > 500:
+                        st.warning(f"⚠️ Large corpus ({num_chunks} chunks). This will take several minutes.")
+                    
+                    with st.status("Embedding & indexing...", expanded=True) as status:
+                        try:
+                            # Batch process - smaller batches for stability
+                            batch_size = 50
+                            all_vecs = []
+                            
+                            progress_bar = st.progress(0)
+                            
+                            for i in range(0, num_chunks, batch_size):
+                                batch = st.session_state.chunks[i:i+batch_size]
+                                batch_num = (i // batch_size) + 1
+                                total_batches = (num_chunks + batch_size - 1) // batch_size
+                                
+                                st.write(f"🔄 Embedding batch {batch_num}/{total_batches} ({len(batch)} chunks)...")
+                                progress_bar.progress(i / num_chunks)
+                                
+                                batch_vecs = embed_texts(batch)
+                                all_vecs.append(batch_vecs)
+                                
+                                # Delay to respect rate limits
+                                if i + batch_size < num_chunks:
+                                    time.sleep(1)
+                            
+                            progress_bar.progress(1.0)
+                            st.write("🔨 Building search index...")
+                            
+                            # Combine all vectors
+                            vecs = np.vstack(all_vecs)
+                            st.session_state.embeddings = vecs
+                            st.session_state.index = build_faiss_index(vecs)
+                            
+                            status.update(label=f"✅ Indexed {num_chunks} chunks!", state="complete")
+                        except Exception as e:
+                            st.error(f"❌ Failed: {str(e)}")
+                            st.code(traceback.format_exc())
+                            status.update(label="❌ Failed", state="error")
+                else:
+                    st.warning("No text content detected in your files.")
             else:
-                st.warning("No text content detected in your files.")
+                st.warning("Could not extract text from uploaded files.")
         else:
-            st.warning("Could not extract text from uploaded files.")
+            # Files already processed
+            if st.session_state.chunks:
+                st.success(f"✅ {len(st.session_state.chunks)} chunks already loaded.")
+                st.caption("Upload new files to replace current corpus.")
 
 # -------------------------- Manage Tab --------------------------- #
 with tab_manage:
@@ -266,6 +306,7 @@ with tab_manage:
                 st.session_state.chunks = []
                 st.session_state.embeddings = None
                 st.session_state.index = None
+                st.session_state.last_uploaded_files = None
                 st.success("Cleared.")
                 st.rerun()
         with c2:
@@ -288,18 +329,13 @@ with tab_ask:
 
     # Ensure we have a corpus
     if not st.session_state.chunks:
-        # Derive from raw_texts if available
-        raw_texts = st.session_state.get("raw_texts", [])
-        if raw_texts:
-            with st.spinner("Chunking…"):
-                st.session_state.chunks = simple_chunk("\n\n".join(raw_texts), chunk_size=900, overlap=150)
-        else:
-            st.warning("Please upload files first in the **Upload** tab.")
-            st.stop()
+        st.warning("⚠️ Please upload files first in the **Upload** tab.")
+        st.stop()
 
     # Ensure embeddings & index exist
     if st.session_state.index is None or st.session_state.embeddings is None:
-        if st.button("Embed & index now", type="secondary"):
+        st.warning("⚠️ No search index found.")
+        if st.button("🔨 Embed & index now", type="secondary"):
             with st.spinner("Embedding & indexing…"):
                 try:
                     vecs = embed_texts(st.session_state.chunks)
@@ -309,18 +345,16 @@ with tab_ask:
                     st.rerun()
                 except Exception as e:
                     st.error(f"Failed to embed/index: {str(e)}")
-        if st.session_state.index is None:
-            st.info("No index yet. Click **Embed & index now** to prepare your corpus.")
-            st.stop()
+        st.stop()
 
     # Query UI
-    q = st.text_input("Your question")
-    top_k = st.slider("Top-K retrieval", 1, 10, value=int(st.session_state.get("top_k_default", 4) or 4), step=1)
-    go = st.button("Search & Answer", type="primary", disabled=not q)
+    q = st.text_input("Your question", placeholder="What would you like to know?")
+    top_k = st.slider("Top-K retrieval", 1, 10, value=4, step=1)
+    go = st.button("🔍 Search & Answer", type="primary", disabled=not q)
 
-    if go:
+    if go and q:
         try:
-            with st.spinner("Retrieving…"):
+            with st.spinner("Retrieving relevant chunks…"):
                 q_vec = embed_texts([q])
                 D, I = search(st.session_state.index, q_vec, k=top_k)
                 selected = [st.session_state.chunks[i] for i in I[0] if 0 <= i < len(st.session_state.chunks)]
@@ -338,21 +372,12 @@ with tab_ask:
                     if 0 <= idx < len(st.session_state.chunks):
                         st.markdown(f"**C{rank}** (score: {float(D[0][rank-1]):.3f})")
                         chunk = st.session_state.chunks[idx]
-                        st.caption(chunk[:500] + ("…" if len(chunk) > 500 else ""))
+                        with st.expander(f"View chunk {rank}"):
+                            st.caption(chunk)
         except Exception as e:
-            st.error(f"Error during search/answer: {str(e)}")
+            st.error(f"❌ Error: {str(e)}")
+            st.code(traceback.format_exc())
 
-# ------------------------- Notes -------------------------------- #
-# Requirements to include in requirements.txt:
-# streamlit
-# openai
-# faiss-cpu
-# pypdf
-# python-dotenv
-# numpy
-#
-# .env (repo root) must contain:
-# OPENAI_API_KEY=sk-...
-#
-# For Streamlit Cloud, add to secrets (TOML format):
-# OPENAI_API_KEY = "sk-..."
+# ------------------------- Footer -------------------------------- #
+st.divider()
+st.caption("GoodBlue RAG Starter • Powered by OpenAI + FAISS")
