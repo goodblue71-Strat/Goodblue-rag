@@ -176,6 +176,7 @@ with tab_upload:
             
             try:
                 # Step 1: Read files
+                st.write("🔵 STEP 1: Reading files...")
                 with st.status("Reading files...") as status:
                     texts = []
                     for f in files:
@@ -186,26 +187,37 @@ with tab_upload:
                             texts.append(read_txt(f))
                     status.update(label="✅ Files read", state="complete")
                 
-                # Step 2: Chunk
+                st.write(f"✅ STEP 1 COMPLETE: Read {len(texts)} files")
+                
+                # Step 2: Join text
+                st.write("🔵 STEP 2: Joining text...")
                 full_text = "\n\n".join([t for t in texts if t])
+                st.write(f"✅ STEP 2 COMPLETE: {len(full_text)} characters")
+                
+                # Step 3: Chunk
+                st.write("🔵 STEP 3: Chunking text...")
                 chunks = simple_chunk(full_text, chunk_size, overlap)
-                st.info(f"📄 Created {len(chunks)} chunks")
+                st.write(f"✅ STEP 3 COMPLETE: Created {len(chunks)} chunks")
                 
                 if len(chunks) == 0:
                     st.error("No text extracted from files")
                     st.session_state.processing = False
                     st.stop()
                 
+                st.info(f"📄 Ready to embed {len(chunks)} chunks")
+                
                 if len(chunks) > 200:
                     st.warning(f"⚠️ Large file: {len(chunks)} chunks. This may take several minutes.")
                 
-                # Step 3: Embed in small batches to avoid timeout
+                # Step 4: Embed in small batches to avoid timeout
+                st.write("🔵 STEP 4: Starting embedding...")
                 with st.status("Embedding...", expanded=True) as status:
                     batch_size = 20  # Much smaller to avoid timeout
                     all_vecs = []
                     progress = st.progress(0)
                     
                     total_batches = (len(chunks) + batch_size - 1) // batch_size
+                    st.write(f"Will process {total_batches} batches of ~{batch_size} chunks each")
                     
                     for i in range(0, len(chunks), batch_size):
                         batch = chunks[i:i+batch_size]
@@ -230,10 +242,14 @@ with tab_upload:
                     
                     status.update(label=f"✅ Embedded {len(chunks)} chunks", state="complete")
                 
-                # Step 4: Build index
+                st.write(f"✅ STEP 4 COMPLETE: Embedded all chunks")
+                
+                # Step 5: Build index
+                st.write("🔵 STEP 5: Building search index...")
                 with st.spinner("Building index..."):
                     combined_vecs = np.vstack(all_vecs)
                     idx = build_faiss_index(combined_vecs)
+                st.write(f"✅ STEP 5 COMPLETE: Index built")
                 
                 # Update state
                 st.session_state.chunks = chunks
@@ -245,7 +261,9 @@ with tab_upload:
                 st.success(f"✅ Indexed {len(chunks)} chunks!")
                 
             except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
+                st.error(f"❌ CRASH DETECTED!")
+                st.error(f"Error: {str(e)}")
+                st.error(f"Type: {type(e).__name__}")
                 st.code(traceback.format_exc())
                 st.session_state.processing = False
         else:
