@@ -1,4 +1,4 @@
-# C11
+# C12
 # app/main.py
 # GoodBlue — RAG Starter (Upload → Chunk → Embed (FAISS) → Retrieve → Answer with Sources)
 
@@ -65,10 +65,12 @@ def simple_chunk(text: str, chunk_size: int = 900, overlap: int = 150, progress_
         if progress_callback and len(chunks) % 100 == 0:
             progress_callback(len(chunks), n, start)
         
-        # Move forward by (chunk_size - overlap), ensuring we always progress
-        start = end - overlap
-        if start <= end - chunk_size:  # Prevent going backwards
-            start = end
+        # Move forward by (chunk_size - overlap)
+        next_start = end - overlap
+        # Safety: if we're not moving forward, jump to end instead
+        if next_start <= start:
+            next_start = end
+        start = next_start
     
     return chunks
 
