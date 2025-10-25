@@ -42,18 +42,30 @@ def read_txt(file) -> str:
     """Read text from a TXT file-like object."""
     return StringIO(file.getvalue().decode("utf-8", errors="ignore")).read()
 
-def simple_chunk(text: str, chunk_size: int = 900, overlap: int = 150) -> List[str]:
+def simple_chunk(text: str, chunk_size: int = 900, overlap: int = 150, progress_callback=None) -> List[str]:
     """Naive character-based chunking with overlap."""
     if not text:
         return []
+    
     chunks = []
     n, start = len(text), 0
+    max_chunks = 2000  # Safety limit
+    
     while start < n:
+        if len(chunks) >= max_chunks:
+            raise ValueError(f"Too many chunks (>{max_chunks}). Reduce file size or increase chunk_size.")
+        
         end = min(start + chunk_size, n)
         chunk = text[start:end].strip()
         if len(chunk) > 10:
             chunks.append(chunk)
+        
+        # Report progress every 100 chunks
+        if progress_callback and len(chunks) % 100 == 0:
+            progress_callback(len(chunks), n, start)
+        
         start = max(0, end - overlap)
+    
     return chunks
 
 def embed_texts(texts: List[str], model: str = "text-embedding-3-small") -> np.ndarray:
@@ -192,12 +204,36 @@ with tab_upload:
                 # Step 2: Join text
                 st.write("🔵 STEP 2: Joining text...")
                 full_text = "\n\n".join([t for t in texts if t])
-                st.write(f"✅ STEP 2 COMPLETE: {len(full_text)} characters")
+                text_length = len(full_text)
+                st.write(f"✅ STEP 2 COMPLETE: {text_length:,} characters")
+                
+                # Check if file is too large
+                max_chars = 1_000_000  # 1 million characters (~500 pages)
+                if text_length > max_chars:
+                    st.error(f"❌ File too large: {text_length:,} characters")
+                    st.error(f"Maximum supported: {max_chars:,} characters")
+                    st.info("💡 Try splitting your document into smaller files")
+                    st.session_state.processing = False
+                    st.stop()
                 
                 # Step 3: Chunk
                 st.write("🔵 STEP 3: Chunking text...")
-                chunks = simple_chunk(full_text, chunk_size, overlap)
-                st.write(f"✅ STEP 3 COMPLETE: Created {len(chunks)} chunks")
+                st.write(f"  → Chunk size: {chunk_size}, Overlap: {overlap}")
+                
+                chunk_progress = st.empty()
+                
+                def chunk_callback(num_chunks, total_chars, current_pos):
+                    pct = int(100 * current_pos / total_chars)
+                    chunk_progress.write(f"  → {num_chunks} chunks created ({pct}% processed)")
+                
+                try:
+                    chunks = simple_chunk(full_text, chunk_size, overlap, progress_callback=chunk_callback)
+                    chunk_progress.empty()
+                    st.write(f"✅ STEP 3 COMPLETE: Created {len(chunks)} chunks")
+                except Exception as e:
+                    st.error(f"❌ Chunking failed: {str(e)}")
+                    st.session_state.processing = False
+                    raise
                 
                 if len(chunks) == 0:
                     st.error("No text extracted from files")
