@@ -62,9 +62,33 @@ def embed_texts(texts: List[str], model: str = "text-embedding-3-small") -> np.n
     if client is None:
         raise ValueError("OPENAI_API_KEY missing")
     
-    resp = client.embeddings.create(model=model, input=texts)
-    vecs = [d.embedding for d in resp.data]
-    return np.array(vecs, dtype="float32")
+    # Retry logic for transient failures
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            resp = client.embeddings.create(
+                model=model, 
+                input=texts,
+                timeout=30.0  # 30 second timeout
+            )
+            vecs = [d.embedding for d in resp.data]
+            return np.array(vecs, dtype="float32")
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 2
+                st.warning(f"⚠️ Attempt {attempt + 1} failed, retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                # Last attempt failed
+                error_msg = str(e)
+                if "timeout" in error_msg.lower():
+                    raise Exception(f"Connection timeout. Try reducing batch size or check your internet connection.")
+                elif "rate_limit" in error_msg.lower():
+                    raise Exception(f"Rate limit hit. Wait a minute and try again.")
+                elif "quota" in error_msg.lower():
+                    raise Exception(f"OpenAI quota exceeded. Check billing at https://platform.openai.com/account/billing")
+                else:
+                    raise Exception(f"OpenAI API error: {error_msg}")
 
 def build_faiss_index(vectors: np.ndarray) -> faiss.IndexFlatIP:
     """Create a cosine-similarity FAISS index."""
@@ -167,24 +191,44 @@ with tab_upload:
                 chunks = simple_chunk(full_text, chunk_size, overlap)
                 st.info(f"📄 Created {len(chunks)} chunks")
                 
-                # Step 3: Embed in batches
-                with st.status("Embedding...") as status:
-                    batch_size = 50
+                if len(chunks) == 0:
+                    st.error("No text extracted from files")
+                    st.session_state.processing = False
+                    st.stop()
+                
+                if len(chunks) > 200:
+                    st.warning(f"⚠️ Large file: {len(chunks)} chunks. This may take several minutes.")
+                
+                # Step 3: Embed in small batches to avoid timeout
+                with st.status("Embedding...", expanded=True) as status:
+                    batch_size = 20  # Much smaller to avoid timeout
                     all_vecs = []
                     progress = st.progress(0)
                     
+                    total_batches = (len(chunks) + batch_size - 1) // batch_size
+                    
                     for i in range(0, len(chunks), batch_size):
                         batch = chunks[i:i+batch_size]
-                        st.write(f"Batch {i//batch_size + 1}/{(len(chunks)-1)//batch_size + 1}")
+                        batch_num = i // batch_size + 1
                         
-                        vecs = embed_texts(batch)
-                        all_vecs.append(vecs)
+                        st.write(f"🔄 Batch {batch_num}/{total_batches} ({len(batch)} chunks)")
+                        
+                        try:
+                            vecs = embed_texts(batch)
+                            all_vecs.append(vecs)
+                            st.write(f"✓ Batch {batch_num} complete")
+                        except Exception as e:
+                            st.error(f"❌ Failed on batch {batch_num}: {str(e)}")
+                            st.session_state.processing = False
+                            raise
                         
                         progress.progress(min(1.0, (i + batch_size) / len(chunks)))
+                        
+                        # Longer delay between batches
                         if i + batch_size < len(chunks):
-                            time.sleep(0.5)
+                            time.sleep(1.5)
                     
-                    status.update(label="✅ Embedded", state="complete")
+                    status.update(label=f"✅ Embedded {len(chunks)} chunks", state="complete")
                 
                 # Step 4: Build index
                 with st.spinner("Building index..."):
