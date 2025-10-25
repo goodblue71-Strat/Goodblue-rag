@@ -49,11 +49,11 @@ def simple_chunk(text: str, chunk_size: int = 900, overlap: int = 150, progress_
     
     chunks = []
     n, start = len(text), 0
-    max_chunks = 2000  # Safety limit
+    max_chunks = 5000  # Raised limit - but will warn above 1000
     
     while start < n:
         if len(chunks) >= max_chunks:
-            raise ValueError(f"Too many chunks (>{max_chunks}). Reduce file size or increase chunk_size.")
+            raise ValueError(f"Too many chunks (>{max_chunks}). Your file is too large. Try: 1) Increase chunk_size to 1500-2000, or 2) Split your document into smaller files.")
         
         end = min(start + chunk_size, n)
         chunk = text[start:end].strip()
@@ -173,9 +173,18 @@ with tab_upload:
     
     col1, col2 = st.columns(2)
     with col1:
-        chunk_size = st.number_input("Chunk size", 300, 2000, 900, 50)
+        chunk_size = st.number_input(
+            "Chunk size", 
+            300, 3000, 1500,  # Changed default from 900 to 1500
+            50,
+            help="Larger chunks = fewer total chunks = faster processing. Recommended: 1500-2000 for large files."
+        )
     with col2:
-        overlap = st.number_input("Overlap", 0, 400, 150, 10)
+        overlap = st.number_input(
+            "Overlap", 
+            0, 400, 150, 10,
+            help="How many characters overlap between chunks"
+        )
     
     # Process button
     if files and st.button("📊 Process Files", type="primary", disabled=st.session_state.processing):
@@ -230,6 +239,12 @@ with tab_upload:
                     chunks = simple_chunk(full_text, chunk_size, overlap, progress_callback=chunk_callback)
                     chunk_progress.empty()
                     st.write(f"✅ STEP 3 COMPLETE: Created {len(chunks)} chunks")
+                    
+                    # Warn if very large
+                    if len(chunks) > 1000:
+                        st.warning(f"⚠️ Large corpus: {len(chunks)} chunks will take ~{len(chunks) * 2 // 60} minutes to embed")
+                        st.info("💡 Tip: Increase 'Chunk size' to 1500-2000 to reduce processing time")
+                        
                 except Exception as e:
                     st.error(f"❌ Chunking failed: {str(e)}")
                     st.session_state.processing = False
