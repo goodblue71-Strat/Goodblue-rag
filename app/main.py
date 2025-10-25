@@ -1,4 +1,4 @@
-# C12
+#c13
 # app/main.py
 # GoodBlue — RAG Starter (Upload → Chunk → Embed (FAISS) → Retrieve → Answer with Sources)
 
@@ -122,16 +122,25 @@ def search(idx: faiss.IndexFlatIP, query_vec: np.ndarray, k: int = 4) -> Tuple[n
     D, I = idx.search(q, k)
     return D, I
 
-def llm_answer(query: str, context_chunks: List[str]) -> str:
+def llm_answer(query: str, context_chunks: List[str], use_web_knowledge: bool = False) -> str:
     """LLM answer with citations."""
     client = get_client()
     if client is None:
         raise ValueError("OPENAI_API_KEY missing")
     
-    system_msg = (
-        "You are a helpful strategy analyst. Answer ONLY using the provided context. "
-        "Cite chunk numbers like [C1], [C2]. If the answer isn't in context, say you don't know."
-    )
+    if use_web_knowledge:
+        system_msg = (
+            "You are a helpful strategy analyst. Answer using BOTH the provided context AND your general knowledge. "
+            "When using context, cite chunk numbers like [C1], [C2]. "
+            "When using general knowledge, note it as [General Knowledge]. "
+            "Prioritize the provided context but supplement with external knowledge when helpful."
+        )
+    else:
+        system_msg = (
+            "You are a helpful strategy analyst. Answer ONLY using the provided context. "
+            "Cite chunk numbers like [C1], [C2]. If the answer isn't in context, say you don't know."
+        )
+    
     numbered = "\n\n".join([f"[C{i+1}] {c}" for i, c in enumerate(context_chunks)])
     user_msg = f"Question: {query}\n\nContext:\n{numbered}"
     
@@ -350,7 +359,16 @@ with tab_ask:
         st.stop()
     
     query = st.text_input("Your question", placeholder="What would you like to know?")
-    top_k = st.slider("Results to retrieve", 1, 10, 4)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        top_k = st.slider("Results to retrieve", 1, 10, 4)
+    with col2:
+        use_web = st.checkbox(
+            "Allow general knowledge", 
+            value=False,
+            help="If checked, can supplement with knowledge beyond the documents"
+        )
     
     if st.button("🔍 Search & Answer", type="primary", disabled=not query):
         try:
@@ -360,12 +378,16 @@ with tab_ask:
                 selected = [st.session_state.chunks[i] for i in I[0] if 0 <= i < len(st.session_state.chunks)]
             
             with st.spinner("Generating answer..."):
-                answer = llm_answer(query, selected)
+                answer = llm_answer(query, selected, use_web_knowledge=use_web)
             
             col1, col2 = st.columns([2, 1])
             
             with col1:
                 st.markdown("### Answer")
+                if use_web:
+                    st.caption("💡 Using documents + general knowledge")
+                else:
+                    st.caption("📄 Using documents only")
                 st.write(answer)
             
             with col2:
