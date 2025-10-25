@@ -1,4 +1,4 @@
-# V11
+# C11
 # app/main.py
 # GoodBlue — RAG Starter (Upload → Chunk → Embed (FAISS) → Retrieve → Answer with Sources)
 
