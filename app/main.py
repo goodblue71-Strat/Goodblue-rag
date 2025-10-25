@@ -49,7 +49,7 @@ def simple_chunk(text: str, chunk_size: int = 900, overlap: int = 150, progress_
     
     chunks = []
     n, start = len(text), 0
-    max_chunks = 5000  # Raised limit - but will warn above 1000
+    max_chunks = 5000  # Safety limit
     
     while start < n:
         if len(chunks) >= max_chunks:
@@ -64,7 +64,10 @@ def simple_chunk(text: str, chunk_size: int = 900, overlap: int = 150, progress_
         if progress_callback and len(chunks) % 100 == 0:
             progress_callback(len(chunks), n, start)
         
-        start = max(0, end - overlap)
+        # Move forward by (chunk_size - overlap), ensuring we always progress
+        start = end - overlap
+        if start <= end - chunk_size:  # Prevent going backwards
+            start = end
     
     return chunks
 
